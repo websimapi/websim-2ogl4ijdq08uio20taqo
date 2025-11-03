@@ -1,4 +1,4 @@
-import { subscribeToGameState } from './database.js';
+import { getGameStateRecord, subscribeToGameState } from './database.js';
 import { getPlayer, setPlayerPosition } from './world.js';
 
 const POSITION_UPDATE_INTERVAL = 100; // 10 times per second
@@ -6,14 +6,34 @@ const POSITION_UPDATE_INTERVAL = 100; // 10 times per second
 export async function initPlayer(room, hostUsername) {
     console.log(`Initializing Player, host is ${hostUsername}...`);
 
-    // Attempt to load initial position from the database.
+    let initialPositionSet = false;
+
+    // First, try a one-time fetch to set the position immediately if possible.
+    // This helps prevent sending an initial (0,0,0) position to the host.
+    const initialRecord = await getGameStateRecord(room);
+    if (initialRecord && initialRecord.slot_1) {
+        const playersData = initialRecord.slot_1;
+        const myData = playersData[room.clientId];
+        if (myData && myData.position) {
+            console.log("Found initial position on first fetch, setting character to:", myData.position);
+            setPlayerPosition(myData.position.x, myData.position.y, myData.position.z);
+            initialPositionSet = true;
+        }
+    }
+
+    // Subscribe for any updates that might have been missed or for the very first load.
     const unsubscribe = subscribeToGameState(room, (gameState) => {
+        if (initialPositionSet) {
+            unsubscribe();
+            return;
+        }
         if (gameState && gameState.slot_1) {
             const playersData = gameState.slot_1;
             const myData = playersData[room.clientId];
             if (myData && myData.position) {
-                console.log("Found my last position, setting character to:", myData.position);
+                console.log("Found my last position via subscription, setting character to:", myData.position);
                 setPlayerPosition(myData.position.x, myData.position.y, myData.position.z);
+                initialPositionSet = true;
                 unsubscribe(); // We only need this once on startup.
             }
         }
@@ -21,8 +41,10 @@ export async function initPlayer(room, hostUsername) {
 
     // Clean up subscription after a timeout if no data is found, to prevent memory leaks.
     setTimeout(() => {
-        unsubscribe();
-        console.log("Stopped listening for initial position.");
+        if (!initialPositionSet) {
+            console.log("Stopped listening for initial position after timeout.");
+            unsubscribe();
+        }
     }, 10000);
 
     // Listen for messages from the host, like position corrections.
@@ -49,4 +71,3 @@ export async function initPlayer(room, hostUsername) {
         }
     }, POSITION_UPDATE_INTERVAL);
 }
-

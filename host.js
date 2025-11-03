@@ -81,20 +81,29 @@ export async function initHost(room, dataDisplayEl) {
         if (clientId === room.clientId) return;
 
         if (type === 'player_position_update') {
+            // ALWAYS trust the host's version of player data first.
             const lastKnownPosition = playersData[clientId]?.position;
             
             // If we have a record of this player and their position is drastically different,
             // send a correction. This can happen on first connect if they spawn at 0,0,0
             // before their client has loaded the correct position from the DB.
             if (lastKnownPosition) {
-                const clientPos = new THREE.Vector3(position.x, position.y, position.z);
-                const serverPos = new THREE.Vector3(lastKnownPosition.x, lastKnownPosition.y, lastKnownPosition.z);
-                if (clientPos.distanceTo(serverPos) > 5.0) { // If more than 5 units away, correct them
-                     console.log(`Correcting position for ${room.peers[clientId]?.username}. DB: ${JSON.stringify(serverPos)}, Client: ${JSON.stringify(clientPos)}`);
+                const clientPos = {x: position.x, y: position.y, z: position.z};
+                const distance = Math.sqrt(
+                    Math.pow(clientPos.x - lastKnownPosition.x, 2) +
+                    Math.pow(clientPos.y - lastKnownPosition.y, 2) +
+                    Math.pow(clientPos.z - lastKnownPosition.z, 2)
+                );
+
+                if (distance > 5.0) { // If more than 5 units away, correct them
+                     console.log(`Correcting position for ${room.peers[clientId]?.username}. DB: ${JSON.stringify(lastKnownPosition)}, Client: ${JSON.stringify(clientPos)}`);
                      room.sendTo(clientId, {
                         type: 'position_correction',
                         position: lastKnownPosition
                      });
+                     // Do not update playersData with this incorrect position.
+                     // Wait for their next update after they've corrected themselves.
+                     return;
                 }
             }
 
